@@ -208,7 +208,8 @@ class ResNetBackboneGN(ResNetBackbone):
                     else:
                         transcribed_key += gn_trans(parts[4])
 
-            new_state_dict[key] = torch.Tensor(state_dict[transcribed_key])
+            val = state_dict[transcribed_key]
+            new_state_dict[key] = val.clone() if isinstance(val, torch.Tensor) else torch.tensor(val)
         
         # strict=False because we may have extra unitialized layers at this point
         self.load_state_dict(new_state_dict, strict=False)

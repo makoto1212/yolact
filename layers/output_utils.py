@@ -37,7 +37,7 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
     dets = dets['detection']
 
     if dets is None:
-        return [torch.Tensor()] * 4 # Warning, this is 4 copies of the same thing
+        return [torch.empty(0)] * 4 # Warning, this is 4 copies of the same thing
 
     if score_threshold > 0:
         keep = dets['score'] > score_threshold
@@ -45,9 +45,9 @@ def postprocess(det_output, w, h, batch_idx=0, interpolation_mode='bilinear',
         for k in dets:
             if k != 'proto':
                 dets[k] = dets[k][keep]
-        
+
         if dets['score'].size(0) == 0:
-            return [torch.Tensor()] * 4
+            return [torch.empty(0)] * 4
     
     # Actually extract everything from dets now
     classes = dets['class']
