@@ -138,7 +138,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
     """
     if undo_transform:
         img_numpy = undo_image_transformation(img, w, h)
-        img_gpu = torch.Tensor(img_numpy).cuda()
+        img_gpu = torch.tensor(img_numpy, dtype=torch.float32).cuda()
     else:
         img_gpu = img / 255.0
         h, w, _ = img.shape
@@ -179,7 +179,7 @@ def prep_display(dets_out, img, h, w, undo_transform=True, class_color=False, ma
                 # The image might come in as RGB or BRG, depending
                 color = (color[2], color[1], color[0])
             if on_gpu is not None:
-                color = torch.Tensor(color).to(on_gpu).float() / 255.
+                color = torch.tensor(color, dtype=torch.float32).to(on_gpu) / 255.
                 color_cache[on_gpu][color_idx] = color
             return color
 
@@ -387,11 +387,11 @@ def prep_metrics(ap_data, dets, img, gt, gt_masks, h, w, num_crowd, image_id, de
     """ Returns a list of APs for this image, with each element being for a class  """
     if not args.output_coco_json:
         with timer.env('Prepare gt'):
-            gt_boxes = torch.Tensor(gt[:, :4])
+            gt_boxes = torch.tensor(gt[:, :4], dtype=torch.float32)
             gt_boxes[:, [0, 2]] *= w
             gt_boxes[:, [1, 3]] *= h
             gt_classes = list(gt[:, 4].astype(int))
-            gt_masks = torch.Tensor(gt_masks).view(-1, h*w)
+            gt_masks = torch.tensor(gt_masks, dtype=torch.float32).view(-1, h*w)
 
             if num_crowd > 0:
                 split = lambda x: (x[-num_crowd:], x[:-num_crowd])

@@ -180,10 +180,7 @@ class Detect(object):
         return boxes, masks, classes, scores
 
     def traditional_nms(self, boxes, masks, scores, iou_threshold=0.5, conf_thresh=0.05):
-        import pyximport
-        pyximport.install(setup_args={"include_dirs":np.get_include()}, reload_support=True)
-
-        from utils.cython_nms import nms as cnms
+        from torchvision.ops import nms as tv_nms
 
         num_classes = scores.size(0)
 
@@ -191,8 +188,8 @@ class Detect(object):
         cls_lst = []
         scr_lst = []
 
-        # Multiplying by max_size is necessary because of how cnms computes its area and intersections
-        boxes = boxes * cfg.max_size
+        # torchvision.ops.nms expects absolute coordinates
+        abs_boxes = boxes * cfg.max_size
 
         for _cls in range(num_classes):
             cls_scores = scores[_cls, :]
@@ -204,10 +201,8 @@ class Detect(object):
 
             if cls_scores.size(0) == 0:
                 continue
-            
-            preds = torch.cat([boxes[conf_mask], cls_scores[:, None]], dim=1).cpu().numpy()
-            keep = cnms(preds, iou_threshold)
-            keep = torch.Tensor(keep, device=boxes.device).long()
+
+            keep = tv_nms(abs_boxes[conf_mask], cls_scores, iou_threshold)
 
             idx_lst.append(idx[keep])
             cls_lst.append(keep * 0 + _cls)
