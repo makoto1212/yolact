@@ -140,7 +140,7 @@ class ResNetBackbone(nn.Module):
 
     def init_backbone(self, path):
         """ Initializes the backbone weights for training. """
-        state_dict = torch.load(path)
+        state_dict = torch.load(path, map_location='cpu', weights_only=False)
 
         # Replace layer1 -> layers.0 etc.
         keys = list(state_dict)
@@ -316,7 +316,7 @@ class DarkNetBackbone(nn.Module):
     def init_backbone(self, path):
         """ Initializes the backbone weights for training. """
         # Note: Using strict=False is berry scary. Triple check this.
-        self.load_state_dict(torch.load(path), strict=False)
+        self.load_state_dict(torch.load(path, map_location='cpu', weights_only=False), strict=False)
 
 
 
@@ -421,7 +421,7 @@ class VGGBackbone(nn.Module):
 
     def init_backbone(self, path):
         """ Initializes the backbone weights for training. """
-        state_dict = torch.load(path)
+        state_dict = torch.load(path, map_location='cpu', weights_only=False)
         state_dict = OrderedDict([(self.transform_key(k), v) for k,v in state_dict.items()])
 
         self.load_state_dict(state_dict, strict=False)

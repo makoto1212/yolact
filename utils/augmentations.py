@@ -217,7 +217,7 @@ class RandomLightingNoise(object):
         # Don't shuffle the channels please, why would you do this
 
         # if random.randint(0, 1):
-        #     swap = self.perms[random.randint(len(self.perms))]
+        #     swap = self.perms[random.randint(0, len(self.perms) - 1)]
         #     shuffle = SwapChannels(swap)  # shuffle channels
         #     image = shuffle(image)
         return image, masks, boxes, labels
