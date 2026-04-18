@@ -186,6 +186,11 @@ def train():
         val_dataset = COCODetection(image_path=cfg.dataset.valid_images,
                                     info_file=cfg.dataset.valid_info,
                                     transform=BaseTransform(MEANS))
+        val_loader = data.DataLoader(val_dataset, args.batch_size,
+                                     num_workers=args.num_workers,
+                                     shuffle=True, collate_fn=detection_collate,
+                                     pin_memory=True,
+                                     generator=torch.Generator(device='cuda'))
 
     # Parallel wraps the underlying module, but when saving and loading we don't want that
     yolact_net = Yolact()
@@ -250,10 +255,14 @@ def train():
     # Which learning rate adjustment step are we on? lr' = lr * gamma ^ step_index
     step_index = 0
 
+    # Use explicit CPU generator to avoid PyTorch 2.6+ conflict with
+    # set_default_tensor_type('torch.cuda.FloatTensor') and RandomSampler
+    _loader_generator = torch.Generator(device='cuda')
     data_loader = data.DataLoader(dataset, args.batch_size,
                                   num_workers=args.num_workers,
                                   shuffle=True, collate_fn=detection_collate,
-                                  pin_memory=True)
+                                  pin_memory=True,
+                                  generator=_loader_generator)
     
     
     save_path = lambda epoch, iteration: SavePath(cfg.name, epoch, iteration).get_path(root=args.save_folder)
@@ -376,8 +385,9 @@ def train():
             # This is done per epoch
             if args.validation_epoch > 0:
                 if epoch % args.validation_epoch == 0 and epoch > 0:
+                    compute_validation_loss(net, val_loader, criterion)
                     compute_validation_map(epoch, iteration, yolact_net, val_dataset, log if args.log else None)
-        
+
         # Compute validation mAP after training is finished
         compute_validation_map(epoch, iteration, yolact_net, val_dataset, log if args.log else None)
     except KeyboardInterrupt:
@@ -412,14 +422,20 @@ def prepare_data(datum, devices:list=None, allocation:list=None):
             allocation = [args.batch_size // len(devices)] * (len(devices) - 1)
             allocation.append(args.batch_size - sum(allocation)) # The rest might need more/less
         
-        images, (targets, masks, num_crowds) = datum
+        if isinstance(datum, list):
+            images = datum
+            targets = masks = num_crowds = None
+        else:
+            images, (targets, masks, num_crowds) = datum
 
         cur_idx = 0
         for device, alloc in zip(devices, allocation):
             for _ in range(alloc):
                 images[cur_idx]  = gradinator(images[cur_idx].to(device))
-                targets[cur_idx] = gradinator(targets[cur_idx].to(device))
-                masks[cur_idx]   = gradinator(masks[cur_idx].to(device))
+                if targets is not None:
+                    targets[cur_idx] = gradinator(targets[cur_idx].to(device))
+                if masks is not None:
+                    masks[cur_idx]   = gradinator(masks[cur_idx].to(device))
                 cur_idx += 1
 
         if cfg.preserve_aspect_ratio:
@@ -436,9 +452,12 @@ def prepare_data(datum, devices:list=None, allocation:list=None):
 
         for device_idx, alloc in enumerate(allocation):
             split_images[device_idx]    = torch.stack(images[cur_idx:cur_idx+alloc], dim=0)
-            split_targets[device_idx]   = targets[cur_idx:cur_idx+alloc]
-            split_masks[device_idx]     = masks[cur_idx:cur_idx+alloc]
-            split_numcrowds[device_idx] = num_crowds[cur_idx:cur_idx+alloc]
+            if targets is not None:
+                split_targets[device_idx]   = targets[cur_idx:cur_idx+alloc]
+            if masks is not None:
+                split_masks[device_idx]     = masks[cur_idx:cur_idx+alloc]
+            if num_crowds is not None:
+                split_numcrowds[device_idx] = num_crowds[cur_idx:cur_idx+alloc]
 
             cur_idx += alloc
 
@@ -462,16 +481,25 @@ def compute_validation_loss(net, data_loader, criterion):
 
     with torch.no_grad():
         losses = {}
-        
-        # Don't switch to eval mode because we want to get losses
         iterations = 0
-        for datum in data_loader:
-            images, targets, masks, num_crowds = prepare_data(datum)
-            out = net(images)
 
-            wrapper = ScatterWrapper(targets, masks, num_crowds)
-            _losses = criterion(out, wrapper, wrapper.make_mask())
-            
+        # net is expected to be CustomDataParallel(NetLoss(Yolact))
+        _net_loss = net.module if isinstance(net, nn.DataParallel) else net
+        _yolact_net = _net_loss.net
+
+        for datum in data_loader:
+            images_list, (targets_list, masks_list, num_crowds_list) = datum
+
+            # Transfer to GPU and format correctly
+            images = torch.stack(images_list, dim=0).cuda()
+            targets = [t.cuda() for t in targets_list]
+            masks = [m.cuda() for m in masks_list]
+            num_crowds = num_crowds_list
+
+            # Manually run the network and criterion
+            out = _yolact_net(images)
+            _losses = criterion(_yolact_net, out, targets, masks, num_crowds)
+
             for k, v in _losses.items():
                 v = v.mean().item()
                 if k in losses:
@@ -482,13 +510,17 @@ def compute_validation_loss(net, data_loader, criterion):
             iterations += 1
             if args.validation_size <= iterations * args.batch_size:
                 break
-        
+
+        if iterations == 0:
+            return float('inf')
+
         for k in losses:
             losses[k] /= iterations
-            
-        
+
         loss_labels = sum([[k, losses[k]] for k in loss_types if k in losses], [])
         print(('Validation ||' + (' %s: %.3f |' * len(losses)) + ')') % tuple(loss_labels), flush=True)
+
+        return sum(losses.values())
 
 def compute_validation_map(epoch, iteration, yolact_net, dataset, log:Log=None):
     with torch.no_grad():
