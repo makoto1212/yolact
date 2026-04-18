@@ -82,6 +82,8 @@ parser.add_argument('--accumulation_steps', default=1, type=int,
                     help='勾配累積ステップ数。実効batch_size = batch_size × accumulation_steps。'
                          'GPUメモリを増やさずに大きなbatch_sizeを擬似的に実現する。'
                          '1=無効（デフォルト）、例: batch_size=4 accumulation_steps=4 → 実効batch_size=16')
+parser.add_argument('--early_stopping_patience', default=-1, type=int,
+                    help='Early stopping patience. If -1, disable early stopping.')
 
 parser.set_defaults(keep_latest=False, log=True, log_gpu=False, interrupt=True, autoscale=True)
 args = parser.parse_args()
@@ -191,6 +193,10 @@ def train():
                                      shuffle=True, collate_fn=detection_collate,
                                      pin_memory=True,
                                      generator=torch.Generator(device='cuda'))
+
+    early_stopper = None
+    if args.early_stopping_patience > 0:
+        early_stopper = EarlyStopping(patience=args.early_stopping_patience)
 
     # Parallel wraps the underlying module, but when saving and loading we don't want that
     yolact_net = Yolact()
@@ -386,7 +392,16 @@ def train():
             if args.validation_epoch > 0:
                 if epoch % args.validation_epoch == 0 and epoch > 0:
                     compute_validation_loss(net, val_loader, criterion)
-                    compute_validation_map(epoch, iteration, yolact_net, val_dataset, log if args.log else None)
+                    val_info = compute_validation_map(epoch, iteration, yolact_net, val_dataset, log if args.log else None)
+
+                    if early_stopper is not None and val_info is not None:
+                        fitness = val_info.get("mask", {}).get("all", None)
+                        if early_stopper(epoch, fitness):
+                            break
+                        if early_stopper.best_epoch == epoch:
+                            best_path = os.path.join(args.save_folder, f"{cfg.name}_best.pth")
+                            print(f"Saving best model (mask mAP={fitness:.2f}) to {best_path}")
+                            yolact_net.save_weights(best_path)
 
         # Compute validation mAP after training is finished
         compute_validation_map(epoch, iteration, yolact_net, val_dataset, log if args.log else None)
@@ -476,26 +491,60 @@ def no_inf_mean(x:torch.Tensor):
     else:
         return x.mean()
 
+class EarlyStopping:
+    """バリデーションmAPが改善しなくなった場合に学習を早期停止するクラス。
+
+    Reference: Ultralytics YOLO11 (ultralytics/utils/torch_utils.py)
+    """
+
+    def __init__(self, patience=10):
+        self.best_fitness = 0.0
+        self.best_epoch = 0
+        self.patience = patience or float("inf")
+
+    def __call__(self, epoch, fitness) -> bool:
+        """fitnessを更新し、停止すべきか判定する。
+
+        Args:
+            epoch:   現在のエポック番号
+            fitness: 現在のfitness値 (mask mAP@0.5:0.95)。Noneなら無視。
+        Returns:
+            True なら学習を停止すべき
+        """
+        if fitness is None:
+            return False
+        fitness = float(np.nan_to_num(fitness))
+        if fitness > self.best_fitness or self.best_fitness == 0:
+            self.best_epoch = epoch
+            self.best_fitness = fitness
+        stop = (epoch - self.best_epoch) >= self.patience
+        if stop:
+            print(
+                f"EarlyStopping: No improvement in last {self.patience} epochs. "
+                f"Best mask mAP = {self.best_fitness:.2f} at epoch {self.best_epoch}."
+            )
+        return stop
+
 def compute_validation_loss(net, data_loader, criterion):
     global loss_types
 
     with torch.no_grad():
         losses = {}
         iterations = 0
-
+        
         # net is expected to be CustomDataParallel(NetLoss(Yolact))
         _net_loss = net.module if isinstance(net, nn.DataParallel) else net
         _yolact_net = _net_loss.net
 
         for datum in data_loader:
             images_list, (targets_list, masks_list, num_crowds_list) = datum
-
+            
             # Transfer to GPU and format correctly
             images = torch.stack(images_list, dim=0).cuda()
             targets = [t.cuda() for t in targets_list]
             masks = [m.cuda() for m in masks_list]
             num_crowds = num_crowds_list
-
+            
             # Manually run the network and criterion
             out = _yolact_net(images)
             _losses = criterion(_yolact_net, out, targets, masks, num_crowds)
@@ -521,11 +570,10 @@ def compute_validation_loss(net, data_loader, criterion):
         print(('Validation ||' + (' %s: %.3f |' * len(losses)) + ')') % tuple(loss_labels), flush=True)
 
         return sum(losses.values())
-
 def compute_validation_map(epoch, iteration, yolact_net, dataset, log:Log=None):
     with torch.no_grad():
         yolact_net.eval()
-        
+
         start = time.time()
         print()
         print("Computing validation mAP (this may take a while)...", flush=True)
@@ -536,6 +584,7 @@ def compute_validation_map(epoch, iteration, yolact_net, dataset, log:Log=None):
             log.log('val', val_info, elapsed=(end - start), epoch=epoch, iter=iteration)
 
         yolact_net.train()
+        return val_info
 
 def setup_eval():
     eval_script.parse_args(['--no_bar', '--max_images='+str(args.validation_size)])
