@@ -78,6 +78,10 @@ parser.add_argument('--batch_alloc', default=None, type=str,
                     help='If using multiple GPUS, you can set this to be a comma separated list detailing which GPUs should get what local batch size (It should add up to your total batch size).')
 parser.add_argument('--no_autoscale', dest='autoscale', action='store_false',
                     help='YOLACT will automatically scale the lr and the number of iterations depending on the batch size. Set this if you want to disable that.')
+parser.add_argument('--accumulation_steps', default=1, type=int,
+                    help='勾配累積ステップ数。実効batch_size = batch_size × accumulation_steps。'
+                         'GPUメモリを増やさずに大きなbatch_sizeを擬似的に実現する。'
+                         '1=無効（デフォルト）、例: batch_size=4 accumulation_steps=4 → 実効batch_size=16')
 
 parser.set_defaults(keep_latest=False, log=True, log_gpu=False, interrupt=True, autoscale=True)
 args = parser.parse_args()
@@ -300,22 +304,26 @@ def train():
                     step_index += 1
                     set_lr(optimizer, args.lr * (args.gamma ** step_index))
                 
-                # Zero the grad to get ready to compute gradients
-                optimizer.zero_grad()
+                # 勾配累積: accumulation_stepsの先頭でzero_grad
+                if iteration % args.accumulation_steps == 0:
+                    optimizer.zero_grad()
 
                 # Forward Pass + Compute loss at the same time (see CustomDataParallel and NetLoss)
                 losses = net(datum)
-                
+
                 losses = { k: (v).mean() for k,v in losses.items() } # Mean here because Dataparallel
-                loss = sum([losses[k] for k in losses])
-                
+                # 勾配累積: lossをaccumulation_stepsで割って平均化
+                loss = sum([losses[k] for k in losses]) / args.accumulation_steps
+
                 # no_inf_mean removes some components from the loss, so make sure to backward through all of it
                 # all_loss = sum([v.mean() for v in losses.values()])
 
                 # Backprop
                 loss.backward() # Do this to free up vram even if loss is not finite
-                if torch.isfinite(loss).item():
-                    optimizer.step()
+                # 勾配累積: accumulation_stepsの末尾でoptimizer.step
+                if (iteration + 1) % args.accumulation_steps == 0:
+                    if torch.isfinite(loss).item():
+                        optimizer.step()
                 
                 # Add the loss to the moving average for bookkeeping
                 for k in losses:
