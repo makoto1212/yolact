@@ -89,6 +89,10 @@ parser.add_argument('--amp', default=True, type=str2bool,
                          'Ampere以降のGPU (CC>=8.0) で有効。Tensorコアで1.5〜2x高速化、'
                          'VRAM半減でbatch_size増加可能。BF16なのでGradScaler不要。'
                          '無効化したい場合は --amp=false。')
+parser.add_argument('--tf32', default=True, type=str2bool,
+                    help='TF32 (Tensorコア matmul/conv) の有効化。デフォルト=True。'
+                         'Ampere以降で精度影響ほぼなしに1.5〜2x高速化。'
+                         'cudnn.benchmarkも同時に有効化する。無効化は --tf32=false。')
 
 parser.set_defaults(keep_latest=False, log=True, log_gpu=False, interrupt=True, autoscale=True)
 args = parser.parse_args()
@@ -133,12 +137,13 @@ loss_types = ['B', 'C', 'M', 'P', 'D', 'E', 'S', 'I']
 if torch.cuda.is_available():
     if args.cuda:
         torch.set_default_device('cuda')
-        # TF32を有効化: Ampere以降のTensorコアでmatmul/convを高速化する。
-        # PyTorch 1.12以降はデフォルトOFF(科学計算向けに精度優先へ変更)のため
-        # DL用途では明示的にONにする。精度影響はほぼ無視できる。
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
+        if args.tf32:
+            # TF32を有効化: Ampere以降のTensorコアでmatmul/convを高速化する。
+            # PyTorch 1.12以降はデフォルトOFF(科学計算向けに精度優先へ変更)のため
+            # DL用途では明示的にONにする。精度影響はほぼ無視できる。
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = True
     if not args.cuda:
         print("WARNING: It looks like you have a CUDA device, but aren't " +
               "using CUDA.\nRun with --cuda for optimal training speed.")
