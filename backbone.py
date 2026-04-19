@@ -1,14 +1,61 @@
+import math
 import torch
 import torch.nn as nn
 import pickle
+import torchvision.ops
 
 from collections import OrderedDict
+from torch.nn.modules.utils import _pair
 
-try:
-    from dcn_v2 import DCN
-except ImportError:
-    def DCN(*args, **kwdargs):
-        raise Exception('DCN could not be imported. If you want to use YOLACT++ models, compile DCN. Check the README for instructions.')
+
+class DCN(nn.Module):
+    """Deformable Convolution v2 の drop-in 実装 (torchvision.ops.deform_conv2d ベース)。
+
+    元の external/DCNv2 (C++/CUDA ビルド必須) を torchvision で代替し、
+    PyTorch 2.x 環境でビルド不要で YOLACT++ を利用可能にする。
+    """
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride, padding,
+                 dilation=1, deformable_groups=1):
+        super().__init__()
+        self.kernel_size = _pair(kernel_size)
+        self.stride = _pair(stride)
+        self.padding = _pair(padding)
+        self.dilation = _pair(dilation)
+        self.deformable_groups = deformable_groups
+
+        self.weight = nn.Parameter(
+            torch.empty(out_channels, in_channels, *self.kernel_size))
+        self.bias = nn.Parameter(torch.zeros(out_channels))
+
+        # offset (2 * kernel_h * kernel_w) + mask (kernel_h * kernel_w) を一括予測
+        channels_ = deformable_groups * 3 * self.kernel_size[0] * self.kernel_size[1]
+        self.conv_offset_mask = nn.Conv2d(
+            in_channels, channels_,
+            kernel_size=self.kernel_size, stride=self.stride,
+            padding=self.padding, bias=True)
+
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        n = self.weight.shape[1]
+        for k in self.kernel_size:
+            n *= k
+        stdv = 1.0 / math.sqrt(n)
+        self.weight.data.uniform_(-stdv, stdv)
+        self.bias.data.zero_()
+        self.conv_offset_mask.weight.data.zero_()
+        self.conv_offset_mask.bias.data.zero_()
+
+    def forward(self, input):
+        out = self.conv_offset_mask(input)
+        o1, o2, mask = torch.chunk(out, 3, dim=1)
+        offset = torch.cat((o1, o2), dim=1)
+        mask = torch.sigmoid(mask)
+        return torchvision.ops.deform_conv2d(
+            input, offset, self.weight, self.bias,
+            stride=self.stride, padding=self.padding,
+            dilation=self.dilation, mask=mask)
 
 class Bottleneck(nn.Module):
     """ Adapted from torchvision.models.resnet """
