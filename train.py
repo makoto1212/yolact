@@ -128,6 +128,12 @@ loss_types = ['B', 'C', 'M', 'P', 'D', 'E', 'S', 'I']
 if torch.cuda.is_available():
     if args.cuda:
         torch.set_default_device('cuda')
+        # TF32を有効化: Ampere以降のTensorコアでmatmul/convを高速化する。
+        # PyTorch 1.12以降はデフォルトOFF(科学計算向けに精度優先へ変更)のため
+        # DL用途では明示的にONにする。精度影響はほぼ無視できる。
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
     if not args.cuda:
         print("WARNING: It looks like you have a CUDA device, but aren't " +
               "using CUDA.\nRun with --cuda for optimal training speed.")
