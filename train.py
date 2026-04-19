@@ -84,6 +84,11 @@ parser.add_argument('--accumulation_steps', default=1, type=int,
                          '1=無効（デフォルト）、例: batch_size=4 accumulation_steps=4 → 実効batch_size=16')
 parser.add_argument('--early_stopping_patience', default=-1, type=int,
                     help='Early stopping patience. If -1, disable early stopping.')
+parser.add_argument('--amp', default=True, type=str2bool,
+                    help='AMP (BF16 autocast) の使用有無。デフォルト=True。'
+                         'Ampere以降のGPU (CC>=8.0) で有効。Tensorコアで1.5〜2x高速化、'
+                         'VRAM半減でbatch_size増加可能。BF16なのでGradScaler不要。'
+                         '無効化したい場合は --amp=false。')
 
 parser.set_defaults(keep_latest=False, log=True, log_gpu=False, interrupt=True, autoscale=True)
 args = parser.parse_args()
@@ -329,12 +334,16 @@ def train():
                 if iteration % args.accumulation_steps == 0:
                     optimizer.zero_grad()
 
-                # Forward Pass + Compute loss at the same time (see CustomDataParallel and NetLoss)
-                losses = net(datum)
+                # AMP (BF16 autocast) で forward + loss を包む。args.amp=False なら FP32 のまま
+                # 通過する (autocast の enabled=False と等価)。BF16 は指数部が FP32 と同じため
+                # underflow しにくく、GradScaler は不要。
+                with torch.amp.autocast('cuda', dtype=torch.bfloat16, enabled=args.amp):
+                    # Forward Pass + Compute loss at the same time (see CustomDataParallel and NetLoss)
+                    losses = net(datum)
 
-                losses = { k: (v).mean() for k,v in losses.items() } # Mean here because Dataparallel
-                # 勾配累積: lossをaccumulation_stepsで割って平均化
-                loss = sum([losses[k] for k in losses]) / args.accumulation_steps
+                    losses = { k: (v).mean() for k,v in losses.items() } # Mean here because Dataparallel
+                    # 勾配累積: lossをaccumulation_stepsで割って平均化
+                    loss = sum([losses[k] for k in losses]) / args.accumulation_steps
 
                 # no_inf_mean removes some components from the loss, so make sure to backward through all of it
                 # all_loss = sum([v.mean() for v in losses.values()])
