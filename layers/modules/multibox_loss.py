@@ -7,6 +7,14 @@ from ..box_utils import match, log_sum_exp, decode, center_size, crop, elemwise_
 
 from data import cfg, mask_type, activation_func
 
+
+def _bce_autocast_safe(input, target, reduction='mean'):
+    # F.binary_cross_entropy は sigmoid 済み入力を取るが autocast (BF16/FP16) 下では
+    # PyTorch が拒否する。ここでは autocast を無効化して float32 で計算する。
+    # （BCEWithLogits へ差し替える案は sigmoid 済み入力との整合が崩れるため不採用）
+    with torch.amp.autocast("cuda", enabled=False):
+        return F.binary_cross_entropy(input.float(), target.float(), reduction=reduction)
+
 class MultiBoxLoss(nn.Module):
     """SSD Weighted Loss Function
     Compute Targets:
@@ -152,7 +160,7 @@ class MultiBoxLoss(nn.Module):
                         pos_masks.append(masks[idx][idx_t[idx, pos[idx]]])
                     masks_t = torch.cat(pos_masks, 0)
                     masks_p = mask_data[pos, :].view(-1, cfg.mask_dim)
-                    losses['M'] = F.binary_cross_entropy(torch.clamp(masks_p, 0, 1), masks_t, reduction='sum') * cfg.mask_alpha
+                    losses['M'] = _bce_autocast_safe(torch.clamp(masks_p, 0, 1), masks_t, reduction='sum') * cfg.mask_alpha
                 else:
                     losses['M'] = self.direct_mask_loss(pos_idx, idx_t, loc_data, mask_data, priors, masks)
             elif cfg.mask_type == mask_type.lincomb:
@@ -467,7 +475,7 @@ class MultiBoxLoss(nn.Module):
                 mask_t = torch.cat(scaled_masks, 0).gt(0.5).float() # Threshold downsampled mask
             
             pos_mask_data = mask_data[idx, cur_pos_idx_squeezed, :]
-            loss_m += F.binary_cross_entropy(torch.clamp(pos_mask_data, 0, 1), mask_t, reduction='sum') * cfg.mask_alpha
+            loss_m += _bce_autocast_safe(torch.clamp(pos_mask_data, 0, 1), mask_t, reduction='sum') * cfg.mask_alpha
 
         return loss_m
     
@@ -592,7 +600,7 @@ class MultiBoxLoss(nn.Module):
 
             if cfg.mask_proto_double_loss:
                 if cfg.mask_proto_mask_activation == activation_func.sigmoid:
-                    pre_loss = F.binary_cross_entropy(torch.clamp(pred_masks, 0, 1), mask_t, reduction='sum')
+                    pre_loss = _bce_autocast_safe(torch.clamp(pred_masks, 0, 1), mask_t, reduction='sum')
                 else:
                     pre_loss = F.smooth_l1_loss(pred_masks, mask_t, reduction='sum')
                 
@@ -602,7 +610,7 @@ class MultiBoxLoss(nn.Module):
                 pred_masks = crop(pred_masks, pos_gt_box_t)
             
             if cfg.mask_proto_mask_activation == activation_func.sigmoid:
-                pre_loss = F.binary_cross_entropy(torch.clamp(pred_masks, 0, 1), mask_t, reduction='none')
+                pre_loss = _bce_autocast_safe(torch.clamp(pred_masks, 0, 1), mask_t, reduction='none')
             else:
                 pre_loss = F.smooth_l1_loss(pred_masks, mask_t, reduction='none')
 
