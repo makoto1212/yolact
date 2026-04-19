@@ -127,13 +127,13 @@ loss_types = ['B', 'C', 'M', 'P', 'D', 'E', 'S', 'I']
 
 if torch.cuda.is_available():
     if args.cuda:
-        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        torch.set_default_device('cuda')
     if not args.cuda:
         print("WARNING: It looks like you have a CUDA device, but aren't " +
               "using CUDA.\nRun with --cuda for optimal training speed.")
-        torch.set_default_tensor_type('torch.FloatTensor')
+        torch.set_default_device('cpu')
 else:
-    torch.set_default_tensor_type('torch.FloatTensor')
+    torch.set_default_device('cpu')
 
 class NetLoss(nn.Module):
     """

@@ -1076,9 +1076,9 @@ if __name__ == '__main__':
 
         if args.cuda:
             cudnn.fastest = True
-            torch.set_default_tensor_type('torch.cuda.FloatTensor')
+            torch.set_default_device('cuda')
         else:
-            torch.set_default_tensor_type('torch.FloatTensor')
+            torch.set_default_device('cpu')
 
         if args.resume and not args.display:
             with open(args.ap_data_file, 'rb') as f:

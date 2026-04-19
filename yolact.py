@@ -278,7 +278,7 @@ class FPN(ScriptModuleWrapper):
                               how many features will it have?
     """
     __constants__ = ['interpolation_mode', 'num_downsample', 'use_conv_downsample', 'relu_pred_layers',
-                     'lat_layers', 'pred_layers', 'downsample_layers', 'relu_downsample_layers']
+                     'relu_downsample_layers']
 
     def __init__(self, in_channels):
         super().__init__()
@@ -695,7 +695,7 @@ if __name__ == '__main__':
 
     # GPU
     net = net.cuda()
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    torch.set_default_device('cuda')
 
     x = torch.zeros((1, 3, cfg.max_size, cfg.max_size))
     y = net(x)
