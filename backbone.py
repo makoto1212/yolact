@@ -187,6 +187,9 @@ class ResNetBackbone(nn.Module):
 
     def init_backbone(self, path):
         """ Initializes the backbone weights for training. """
+        # weights_only=False: 公式配布の信頼済みResNet/DarkNet/VGG重みのみを想定。
+        # PyTorch 2.6+ のデフォルトTrueだとpickle由来のカスタムクラス(state_dict内)で
+        # 失敗するため明示的にFalse。第三者配布の重みを読み込む際は要注意。
         state_dict = torch.load(path, map_location='cpu', weights_only=False)
 
         # Replace layer1 -> layers.0 etc.

@@ -168,6 +168,16 @@ class NetLoss(nn.Module):
         losses = self.criterion(self.net, preds, targets, masks, num_crowds)
         return losses
 
+
+def _seed_worker(worker_id):
+    """DataLoader worker毎に stdlib random / numpy.random / torch にユニークな seed を設定する。
+    augmentations.py が stdlib random を使用するため、worker_init_fn 未設定だと
+    全 worker が同じ乱数系列を出してaugmentation多様性が失われる。
+    """
+    seed = (torch.initial_seed() + worker_id) % (2**32)
+    random.seed(seed)
+    np.random.seed(seed)
+
 class CustomDataParallel(nn.DataParallel):
     """
     This is a custom version of DataParallel that works better with our training data.
@@ -208,7 +218,8 @@ def train():
                                      num_workers=args.num_workers,
                                      shuffle=True, collate_fn=detection_collate,
                                      pin_memory=True,
-                                     generator=torch.Generator(device='cuda'))
+                                     generator=torch.Generator(device='cpu'),
+                                     worker_init_fn=_seed_worker)
 
     early_stopper = None
     if args.early_stopping_patience > 0:
@@ -277,14 +288,15 @@ def train():
     # Which learning rate adjustment step are we on? lr' = lr * gamma ^ step_index
     step_index = 0
 
-    # Use explicit CPU generator to avoid PyTorch 2.6+ conflict with
-    # set_default_tensor_type('torch.cuda.FloatTensor') and RandomSampler
-    _loader_generator = torch.Generator(device='cuda')
+    # set_default_device('cuda') 下では torch.Generator() がCUDAに作られてしまい
+    # DataLoader workerへのfork時に問題となるため、明示的にCPU generatorを指定する。
+    _loader_generator = torch.Generator(device='cpu')
     data_loader = data.DataLoader(dataset, args.batch_size,
                                   num_workers=args.num_workers,
                                   shuffle=True, collate_fn=detection_collate,
                                   pin_memory=True,
-                                  generator=_loader_generator)
+                                  generator=_loader_generator,
+                                  worker_init_fn=_seed_worker)
     
     
     save_path = lambda epoch, iteration: SavePath(cfg.name, epoch, iteration).get_path(root=args.save_folder)
