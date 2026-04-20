@@ -103,6 +103,11 @@ def mask_iou(masks_a, masks_b, iscrowd=False):
     Wait I thought this was "box_utils", why am I putting this in here?
     """
 
+    # validation 時に予測マスク (cuda) と GT マスク (cpu) で device 不一致になり
+    # `cuda:0 and cpu` の RuntimeError で落ちるため、masks_a 側へ寄せる
+    if masks_a.device != masks_b.device:
+        masks_b = masks_b.to(masks_a.device)
+
     masks_a = masks_a.view(masks_a.size(0), -1)
     masks_b = masks_b.view(masks_b.size(0), -1)
 
