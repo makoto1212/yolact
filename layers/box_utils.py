@@ -63,6 +63,11 @@ def jaccard(box_a, box_b, iscrowd:bool=False):
     Return:
         jaccard overlap: (tensor) Shape: [box_a.size(0), box_b.size(0)]
     """
+    # validation 時に予測 box (cuda) と GT box (cpu) で device 不一致になり
+    # `cuda:0 and cpu` の RuntimeError で落ちるため、box_a 側へ寄せる
+    if box_a.device != box_b.device:
+        box_b = box_b.to(box_a.device)
+
     use_batch = True
     if box_a.dim() == 2:
         use_batch = False
