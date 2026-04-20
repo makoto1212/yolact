@@ -370,10 +370,12 @@ def train():
                 # 勾配累積: accumulation_stepsの末尾でoptimizer.step
                 if (iteration + 1) % args.accumulation_steps == 0:
                     if torch.isfinite(loss).item():
-                        # 勾配クリッピング: BF16 autocast下の勾配爆発 → NaN を抑止
-                        grad_norm = torch.nn.utils.clip_grad_norm_(yolact_net.parameters(), max_norm=5.0)
-                        if grad_norm > 5.0:
-                            print(f"[GradClip] iter {iteration}: grad_norm={grad_norm:.2f} (clipped to 5.0)", flush=True)
+                        # 勾配クリッピング: NaN/Inf爆発の最終防衛線
+                        # YOLACTの通常学習はgrad_norm 50〜100が普通で、5.0では過剰クリップになり
+                        # 学習効率が激落ちする。真の異常時のみ発動させる目的で50.0に設定
+                        grad_norm = torch.nn.utils.clip_grad_norm_(yolact_net.parameters(), max_norm=50.0)
+                        if grad_norm > 50.0:
+                            print(f"[GradClip] iter {iteration}: grad_norm={grad_norm:.2f} (clipped to 50.0)", flush=True)
                         optimizer.step()
                     else:
                         print(f"[NaN] iter {iteration}: loss={loss.item()} (optimizer.step()スキップ)", flush=True)
