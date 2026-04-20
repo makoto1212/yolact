@@ -12,8 +12,11 @@ def _bce_autocast_safe(input, target, reduction='mean'):
     # F.binary_cross_entropy は sigmoid 済み入力を取るが autocast (BF16/FP16) 下では
     # PyTorch が拒否する。ここでは autocast を無効化して float32 で計算する。
     # （BCEWithLogits へ差し替える案は sigmoid 済み入力との整合が崩れるため不採用）
+    # torch.clamp は NaN を修正できないため nan_to_num で除去する
     with torch.amp.autocast("cuda", enabled=False):
-        return F.binary_cross_entropy(input.float(), target.float(), reduction=reduction)
+        return F.binary_cross_entropy(
+            torch.nan_to_num(input.float(), nan=0.0, posinf=1.0, neginf=0.0),
+            target.float(), reduction=reduction)
 
 class MultiBoxLoss(nn.Module):
     """SSD Weighted Loss Function

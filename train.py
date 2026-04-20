@@ -357,6 +357,7 @@ def train():
                 loss.backward() # Do this to free up vram even if loss is not finite
                 # 勾配累積: accumulation_stepsの末尾でoptimizer.step
                 if (iteration + 1) % args.accumulation_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(yolact_net.parameters(), max_norm=10.0)
                     if torch.isfinite(loss).item():
                         optimizer.step()
                 
